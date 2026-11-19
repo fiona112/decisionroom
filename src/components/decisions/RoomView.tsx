@@ -2,8 +2,9 @@ import { useRef, useState, type FormEvent } from 'react'
 import { Link } from 'react-router-dom'
 import { useAuth, useQuery, useRecordContext, useUserLookup } from 'deepspace'
 import { ArrowLeft, Check, Copy, LockKeyhole, MessageSquare, Plus, Users, Vote as VoteIcon } from 'lucide-react'
-import type { Room, Suggestion, Vote, Comment } from '../../schemas/decision-schema'
+import type { Room, Suggestion, Vote, Rating, Comment } from '../../schemas/decision-schema'
 import { decisionCommand } from '../../lib/decisions'
+import { calculateGroupFit } from '../../lib/group-fit'
 import { useNetworkOnline } from '../../lib/use-network-online'
 import { QueryNotice, RoomForm } from './shared'
 
@@ -15,9 +16,11 @@ export function RoomView({ roomId }: { roomId: string }) {
   const roomQuery = useQuery<Room>('rooms', { where: { recordId: roomId }, limit: 1 })
   const options = useQuery<Suggestion>('suggestions', { where: { teamId: roomId }, orderBy: 'createdAt', orderDir: 'asc', limit: 100 })
   const votes = useQuery<Vote>('votes', { where: { teamId: roomId }, limit: 200 })
+  const ratings = useQuery<Rating>('ratings', { where: { teamId: roomId }, limit: 5000 })
   const members = useQuery<{ userId: string }>('team_members', { where: { teamId: roomId }, limit: 200 })
   const invites = useQuery<{ token: string }>('invitations', { where: { teamId: roomId }, limit: 1 })
   const [adding, setAdding] = useState(false)
+  const [ratingPending, setRatingPending] = useState('')
   const [confirmClose, setConfirmClose] = useState(false)
   const [pending, setPending] = useState('')
   const [error, setError] = useState('')
@@ -28,9 +31,13 @@ export function RoomView({ roomId }: { roomId: string }) {
   const room = roomQuery.records[0]
   const ownVote = votes.records.find(v => v.data.userId === userId)?.data.suggestionId
   const closed = room?.data.status === 'closed'
-  const ready = online && connection.ready && connection.status === 'connected' && [roomQuery, options, votes, members].every(q => q.status === 'ready')
+  const ready = online && connection.ready && connection.status === 'connected' && [roomQuery, options, votes, ratings, members].every(q => q.status === 'ready')
   const tally = new Map<string, number>()
   for (const v of votes.records) tally.set(v.data.suggestionId, (tally.get(v.data.suggestionId) || 0) + 1)
+  const fit = calculateGroupFit(options.records.map(option => option.recordId), members.records.length, ratings.records.map(r => ({ suggestionId: r.data.suggestionId, userId: r.data.userId, score: Number(r.data.score) })))
+  const fitById = new Map(fit.map(result => [result.suggestionId, result]))
+  const ratedOptions = fit.filter(result => result.count > 0)
+  const ownRatings = new Map(ratings.records.filter(r => r.data.userId === userId).map(r => [r.data.suggestionId, Number(r.data.score)]))
   const highest = Math.max(0, ...tally.values())
   const leaders = options.records.filter(o => highest > 0 && tally.get(o.recordId) === highest)
   async function run(kind: 'vote' | 'close', suggestionId?: string) {
@@ -42,6 +49,15 @@ export function RoomView({ roomId }: { roomId: string }) {
       setNotice(kind === 'close' ? 'Voting closed. Results are final.' : 'Your vote is saved. You can change it while voting is open.')
     } catch (e) { setError(e instanceof Error ? e.message : 'Could not save.') }
     finally { setPending(''); lock.current = false }
+  }
+  async function submitRating(suggestionId: string, score: number) {
+    if (lock.current || !ready || closed) return
+    lock.current = true; setRatingPending(suggestionId); setError(''); setNotice('')
+    try {
+      await decisionCommand({ kind: 'rate', roomId, suggestionId, score })
+      setNotice('Your preference rating was saved. You can update it until the room closes.')
+    } catch (e) { setError(e instanceof Error ? e.message : 'Could not save rating.') }
+    finally { setRatingPending(''); lock.current = false }
   }
   async function copyInvite() {
     const token = invites.records[0]?.data.token
@@ -63,8 +79,20 @@ export function RoomView({ roomId }: { roomId: string }) {
     <div className="dr-room-summary"><span><Users size={17} />{members.records.length} members</span><span><VoteIcon size={17} />{votes.records.length} votes cast</span><span className="dr-live"><span />{ready ? (closed ? 'Final results' : 'Live results') : 'Connecting…'}</span></div>
     {error && <p className="dr-error" role="alert">{error}</p>}{notice && <p className="dr-success" role="status">{notice}</p>}
     {(!online || connection.status !== 'connected') && <p className="dr-error" role="status">Connection lost. Reconnecting… Your view may be out of date.</p>}
-    {[options, votes, members].some(q => q.status === 'error') && <QueryNotice status="error" error="Results may be out of date. Reconnect before voting." />}
+    {[options, votes, ratings, members].some(q => q.status === 'error') && <QueryNotice status="error" error="Results may be out of date. Reconnect before voting." />}
     {closed && ready && <section className="dr-outcome"><span className="dr-icon"><Check size={24} /></span><div><p className="dr-eyebrow">THE ROOM HAS DECIDED</p><h2>{leaders.length === 0 ? 'Closed without any votes' : leaders.length > 1 ? `It’s a tie between ${leaders.length} options` : leaders[0].data.title}</h2><p>{leaders.length > 1 ? leaders.map(l => l.data.title).join(' · ') : leaders.length ? `${highest} of ${votes.records.length} votes. Thanks for adding your voice.` : 'The discussion can still continue below.'}</p></div></section>}
+    <section className="dr-fit-board dr-panel" aria-label="Group fit rankings">
+      <div className="dr-section-header"><div><p className="dr-eyebrow">FIND COMMON GROUND</p><h2>Group fit <span className="dr-count">{ratedOptions.length}</span></h2></div></div>
+      <p className="dr-note">Personal ratings help everyone see what works. These scores are advisory; votes still determine the outcome. A 100% score from one person isn't the same as agreement from the whole room.</p>
+      {ratings.status !== 'ready' && <QueryNotice status={ratings.status} error={ratings.error} />}
+      {ratings.status === 'ready' && !ratedOptions.length && <p className="dr-fit-empty">No ratings yet. Use the 1–5 buttons beside any option to start comparing group preferences.</p>}
+      {ratings.status === 'ready' && ratedOptions.length > 0 && <div className="dr-fit-list">{ratedOptions.map((result, index) => {
+        const option = options.records.find(o => o.recordId === result.suggestionId)
+        if (!option) return null
+        const tied = index > 0 && result.average === ratedOptions[index - 1].average && result.count === ratedOptions[index - 1].count
+        return <div className="dr-fit-row" key={result.suggestionId}><div className="dr-fit-heading"><span className="dr-fit-title">{tied ? 'Tie' : `#${index + 1}`} · {option.data.title}</span><strong>{result.percent}%</strong></div><div className="dr-progress" role="progressbar" aria-label={`Group fit for ${option.data.title}`} aria-valuenow={result.percent} aria-valuemin={0} aria-valuemax={100}><span style={{ width: `${result.percent}%` }} /></div><span className="dr-note">{result.count} of {members.records.length} members rated · {result.average.toFixed(1)}/5 average{result.complete ? ' · Everyone rated' : ' · Partial participation'}</span></div>
+      })}</div>}
+    </section>
     <div className="dr-workspace"><section className="dr-options"><div className="dr-section-header"><div><p className="dr-eyebrow">PUT IT ON THE TABLE</p><h2>Options <span className="dr-count">{options.records.length}</span></h2></div>{!closed && <button className="dr-button secondary small" disabled={!ready} onClick={() => setAdding(!adding)} aria-expanded={adding}><Plus size={16} />Add option</button>}</div>
       <p className="dr-note dr-vote-note">{closed ? 'Voting is closed. These results are final.' : ownVote ? 'Your vote is in. Select another option to change it.' : 'Choose one option. You can change your vote until the host closes voting.'}</p>
       {adding && !closed && <div className="dr-panel dr-option-form"><h3>Add an option</h3><RoomForm kind="suggest" roomId={roomId} onSaved={() => setAdding(false)} onCancel={() => setAdding(false)} /></div>}
@@ -76,6 +104,7 @@ export function RoomView({ roomId }: { roomId: string }) {
         const selected = ownVote === option.recordId
         return <article className={`dr-option ${selected ? 'selected' : ''}`} key={option.recordId} data-testid="option-card"><div className="dr-option-top"><span className="dr-option-number">{String(index + 1).padStart(2, '0')}</span><div className="dr-option-content"><h3>{option.data.title}</h3>{option.data.description && <p>{option.data.description}</p>}<span className="dr-note">Suggested by {option.data.authorId === userId ? 'you' : getName(option.data.authorId) || 'a room member'}</span></div></div>
           <div className="dr-result"><div className="dr-row"><span>{count} {count === 1 ? 'vote' : 'votes'}{closed && highest > 0 && count === highest ? ' · Top choice' : ''}</span><strong>{percent}%</strong></div><div className="dr-progress" role="progressbar" aria-label={`Votes for ${option.data.title}`} aria-valuenow={percent} aria-valuemin={0} aria-valuemax={100}><span style={{ width: `${percent}%` }} /></div></div>
+          <div className="dr-rating"><div className="dr-row"><strong>How well does this work for you?</strong><span className="dr-note">{fitById.get(option.recordId)?.count || 0} of {members.records.length} rated</span></div><div className="dr-rate-controls" role="group" aria-label={`Rate ${option.data.title} from 1 to 5`}>{[1, 2, 3, 4, 5].map(score => <button key={score} type="button" className={ownRatings.get(option.recordId) === score ? 'is-rated' : ''} aria-label={`Rate ${option.data.title} ${score} out of 5`} aria-pressed={ownRatings.get(option.recordId) === score} disabled={closed || !!pending || !!ratingPending || !ready} onClick={() => void submitRating(option.recordId, score)}>{score}</button>)}</div><span className="dr-note">{ratingPending === option.recordId ? 'Saving your rating…' : ownRatings.has(option.recordId) ? `Your rating: ${ownRatings.get(option.recordId)}/5` : 'Optional · 1 = poor fit, 5 = great fit'}</span></div>
           <button className={`dr-vote ${selected ? 'chosen' : ''}`} disabled={closed || !!pending || !ready || selected} aria-pressed={selected} onClick={() => void run('vote', option.recordId)}>{pending === option.recordId ? 'Saving vote…' : selected ? <><Check size={16} />Your vote</> : closed ? 'Voting closed' : 'Vote for this option'}</button>
         </article>
       })}

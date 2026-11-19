@@ -10,6 +10,7 @@ const commands = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('join'), token: z.string().uuid() }),
   z.object({ kind: z.literal('suggest'), roomId: id, title, description }),
   z.object({ kind: z.literal('vote'), roomId: id, suggestionId: id }),
+  z.object({ kind: z.literal('rate'), roomId: id, suggestionId: id, score: z.number().int().min(1).max(5) }),
   z.object({ kind: z.literal('comment'), roomId: id, body: z.string().trim().min(1).max(2000) }),
   z.object({ kind: z.literal('close'), roomId: id }),
 ])
@@ -71,9 +72,15 @@ export async function runDecisionCommand(userId: string, input: unknown, tools: 
       } else {
         const suggestion = value(await tools.get('suggestions', p.suggestionId)).record
         if (suggestion.data.teamId !== p.roomId) throw new Error('That suggestion does not belong to this room.')
-        const votes = value(await tools.query('votes', { where: { teamId: p.roomId, userId }, limit: 1 })).records
-        if (votes.length) value(await tools.update('votes', votes[0].recordId, { suggestionId: p.suggestionId }))
-        else value(await tools.create('votes', { teamId: p.roomId, userId, suggestionId: p.suggestionId }))
+        if (p.kind === 'rate') {
+          const ratings = value(await tools.query('ratings', { where: { teamId: p.roomId, userId, suggestionId: p.suggestionId }, limit: 1 })).records
+          if (ratings.length) value(await tools.update('ratings', ratings[0].recordId, { score: String(p.score) }))
+          else value(await tools.create('ratings', { teamId: p.roomId, userId, suggestionId: p.suggestionId, score: String(p.score) }))
+        } else {
+          const votes = value(await tools.query('votes', { where: { teamId: p.roomId, userId }, limit: 1 })).records
+          if (votes.length) value(await tools.update('votes', votes[0].recordId, { suggestionId: p.suggestionId }))
+          else value(await tools.create('votes', { teamId: p.roomId, userId, suggestionId: p.suggestionId }))
+        }
       }
     }
     return { success: true, data: { roomId: p.roomId } }

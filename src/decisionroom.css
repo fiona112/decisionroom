@@ -131,3 +131,22 @@
 @media (max-width: 960px) { .dr-room-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } .dr-workspace { grid-template-columns:minmax(0,1fr) 300px; gap:20px; } .dr-hero { gap:40px; margin-top:40px; } }
 @media (max-width: 720px) { .dr-container { padding:28px 18px 45px; } .dr-page-header { align-items:flex-start; flex-direction:column; gap:18px; } .dr-overview { gap:30px; } .dr-overview > p { display:none; } .dr-room-grid { grid-template-columns:1fr; } .dr-workspace { grid-template-columns:1fr; gap:15px; } .dr-toolbar { flex-wrap:wrap; } .dr-search { max-width:none; } .dr-room-summary { gap:16px; } .dr-option { padding:20px; } .dr-room-summary .dr-live { margin-left:0; } .dr-hero { grid-template-columns:1fr; margin:40px auto 60px; gap:50px; } .dr-hero h1 { font-size:56px; } .dr-demo { transform:none; max-width:440px; padding:24px; } .dr-landing-nav > .dr-text-link { font-size:11px; } .dr-landing { padding:0 6vw; } .dr-heading-meta { flex-wrap:wrap; gap:10px; } .dr-invite .dr-panel { padding:28px; } }
 @media (prefers-reduced-motion: reduce) { .dr-room-card, .dr-progress > span, .dr-button { transition:none; } }
+
+/* CommonGround: private member ratings and shared group-fit comparison */
+.dr-fit-board { margin-bottom:28px; padding:24px; }
+.dr-fit-board > .dr-note { display:block; max-width:800px; margin-bottom:18px; line-height:1.65; }
+.dr-fit-empty { font-size:13px; padding:16px; background:#f4f7f4; border-radius:8px; color:#526b5b; }
+.dr-fit-list { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,260px),1fr)); gap:16px; }
+.dr-fit-row { padding:15px; border:1px solid #dce6df; border-radius:9px; min-width:0; }
+.dr-fit-heading { display:flex; gap:12px; align-items:center; justify-content:space-between; font-size:12px; }
+.dr-fit-title { min-width:0; overflow-wrap:anywhere; font-weight:650; }
+.dr-fit-row .dr-note { display:block; margin-top:9px; font-size:11px; }
+.dr-rating { border-top:1px solid #edf0ee; padding:14px 0; margin-top:8px; }
+.dr-rating .dr-row { flex-wrap:wrap; align-items:center; justify-content:space-between; gap:6px; font-size:12px; }
+.dr-rate-controls { display:flex; gap:7px; padding:11px 0 7px; }
+.dr-rate-controls button { min-height:36px; min-width:36px; border-radius:7px; border:1px solid #cbd9ce; background:white; color:#315b43; font-size:13px; cursor:pointer; }
+.dr-rate-controls button.is-rated { background:#236254; color:white; border-color:#236254; }
+.dr-rate-controls button:not(:disabled):hover { border-color:#236254; box-shadow:0 0 0 2px #dae9dd; }
+.dr-rate-controls button:disabled { opacity:.58; cursor:not-allowed; }
+.dr-rate-controls button.is-rated:disabled { opacity:1; }
+@media (max-width:720px) { .dr-fit-board { padding:18px; } }

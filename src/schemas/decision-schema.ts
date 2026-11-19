@@ -14,11 +14,13 @@ export const decisionSchemas: CollectionSchema[] = [
   collection('team_members', [text('userId'), text('status', 10)], { uniqueOn: ['teamId', 'userId'] }),
   collection('invitations', [text('token', 100)], { uniqueOn: ['teamId'] }),
   collection('suggestions', [text('title', 120), text('description'), text('authorId')]),
+  collection('ratings', [text('userId'), text('suggestionId'), text('score', 1)], { uniqueOn: ['teamId', 'userId', 'suggestionId'] }),
   collection('votes', [text('userId'), text('suggestionId')], { uniqueOn: ['teamId', 'userId'] }),
   collection('comments', [text('body', 2000), text('authorId')]),
 ]
 
 export type Room = { teamId: string; title: string; description: string; hostId: string; status: 'open' | 'closed'; closedAt?: string }
 export type Suggestion = { teamId: string; title: string; description: string; authorId: string }
+export type Rating = { teamId: string; userId: string; suggestionId: string; score: string }
 export type Vote = { teamId: string; userId: string; suggestionId: string }
 export type Comment = { teamId: string; body: string; authorId: string }

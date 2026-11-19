@@ -72,7 +72,7 @@ test('DecisionRoom: invitation, live voting, vote change, discussion, close, rel
   expect(await host.page.evaluate(() => navigator.clipboard.readText())).toContain(`invite=${token}`)
   await outsider.page.goto(`/home?room=${roomId}`)
   await expect(outsider.page.getByRole('heading', { name: 'This room isn’t available.' })).toBeVisible()
-  for (const collection of ['rooms', 'team_members', 'invitations', 'suggestions', 'votes', 'comments']) {
+  for (const collection of ['rooms', 'team_members', 'invitations', 'suggestions', 'votes', 'ratings', 'comments']) {
     const hidden = await o.tool('records_query', { collection, where: { teamId: roomId } })
     expect(hidden.success).toBe(true)
     expect(hidden.data.records).toHaveLength(0)
@@ -134,7 +134,7 @@ test('DecisionRoom: invitation, live voting, vote change, discussion, close, rel
   await expect(guest.page.getByRole('heading', { name: 'It’s a tie between 2 options' })).toBeVisible()
   await expect(guest.page.getByText('Thanks, everyone!')).toBeVisible()
   // A member still cannot expose these now-populated collections to outsiders.
-  for (const collection of ['rooms', 'team_members', 'invitations', 'suggestions', 'votes', 'comments']) {
+  for (const collection of ['rooms', 'team_members', 'invitations', 'suggestions', 'votes', 'ratings', 'comments']) {
     expect((await o.tool('records_query', { collection, where: { teamId: roomId } })).data.records).toHaveLength(0)
   }
   expect(errors).toEqual([])
@@ -156,7 +156,7 @@ test('DecisionRoom: forged writes, identity spoofing, concurrent votes and close
   // Bypass React and the HTTP tools: verify the actual WebSocket boundary.
   const appId = readFileSync('wrangler.toml', 'utf8').match(/DEEPSPACE_APP_ID\s*=\s*"([^"]+)"/)![1]
   const { token: guestToken } = await (await guest.context.request.post('/api/auth/token')).json()
-  const collections = ['rooms', 'team_members', 'invitations', 'suggestions', 'votes', 'comments']
+  const collections = ['rooms', 'team_members', 'invitations', 'suggestions', 'votes', 'ratings', 'comments']
   const messages = collections.flatMap(collection => [
     clientBuild.subscribe(collection, { collection, where: { teamId: roomId } }),
     clientBuild.put(collection, collection === 'rooms' ? roomId : crypto.randomUUID(),
@@ -179,13 +179,13 @@ test('DecisionRoom: forged writes, identity spoofing, concurrent votes and close
           const message = JSON.parse(String(event.data))
           if (message.type === 'core.query_result') snapshots[message.payload.subscriptionId] = message.payload.records
           if (message.type === 'records.ack') acks.push(message.payload.success)
-          if (Object.keys(snapshots).length === 6 && acks.length === 6) {
+          if (Object.keys(snapshots).length === 7 && acks.length === 7) {
             clearTimeout(timer); ws.close(); resolve({ snapshots, acks })
           }
         }
       })
     }, { appId, token, hostId: host.userId!, messages })
-    expect(result.acks).toEqual(Array(6).fill(false))
+    expect(result.acks).toEqual(Array(7).fill(false))
     if (!token) for (const rows of Object.values(result.snapshots)) expect(rows).toHaveLength(0)
     else expect(result.snapshots.rooms).toHaveLength(1)
   }
@@ -196,7 +196,7 @@ test('DecisionRoom: forged writes, identity spoofing, concurrent votes and close
   expect((await g.command({ kind: 'join', token: 'not-an-invitation' })).success).toBe(false)
   expect((await h.command({ kind: 'suggest', roomId, title: '  ' })).success).toBe(false)
   expect((await h.command({ kind: 'comment', roomId, body: 'x'.repeat(2001) })).success).toBe(false)
-  for (const collection of ['rooms', 'team_members', 'invitations', 'suggestions', 'votes', 'comments']) {
+  for (const collection of ['rooms', 'team_members', 'invitations', 'suggestions', 'votes', 'ratings', 'comments']) {
     const forged = await g.tool('records_create', { collection, data: { teamId: roomId, title: 'Forged', userId: host.userId, status: 'active', suggestionId: options[0].recordId } }, { 'X-App-Action': 'true', 'X-User-Id': host.userId! })
     expect(forged.success).toBe(false)
   }
@@ -218,4 +218,37 @@ test('DecisionRoom: forged writes, identity spoofing, concurrent votes and close
   expect((await g.command({ kind: 'vote', roomId, suggestionId: options.find((r: { recordId: string }) => r.recordId !== frozen).recordId })).success).toBe(false)
   expect((await h.tool('records_query', { collection: 'votes', where: { teamId: roomId } })).data.records[0].data.suggestionId).toBe(frozen)
   expect((await g.tool('records_delete', { collection: 'rooms', recordId: roomId })).success).toBe(false)
+})
+
+test('CommonGround: member ratings, live group fit, privacy, concurrency, and closing', async ({ users }) => {
+  test.setTimeout(120_000)
+  const [host, guest, outsider] = await users(3)
+  await Promise.all([openHome(host.page), openHome(guest.page), openHome(outsider.page)])
+  const h = await client(host.context), g = await client(guest.context), o = await client(outsider.context)
+  const roomId = (await h.command({ kind: 'createRoom', title: `__test-${Date.now()}__ Group fit` })).data.roomId
+  const token = (await h.tool('records_query', { collection: 'invitations', where: { teamId: roomId } })).data.records[0].data.token
+  expect((await g.command({ kind: 'join', token })).success).toBe(true)
+  expect((await h.command({ kind: 'suggest', roomId, title: 'Tea' })).success).toBe(true)
+  const suggestionId = (await h.tool('records_query', { collection: 'suggestions', where: { teamId: roomId } })).data.records[0].recordId
+  await host.page.goto(`/home?room=${roomId}`)
+  await guest.page.goto(`/home?room=${roomId}`)
+  const rate5 = host.page.getByRole('button', { name: 'Rate Tea 5 out of 5' })
+  await expect(rate5).toBeEnabled()
+  await rate5.click()
+  await expect(guest.page.getByText('1 of 2 members rated')).toBeVisible()
+  await expect(guest.page.getByRole('progressbar', { name: 'Group fit for Tea' })).toHaveAttribute('aria-valuenow', '100')
+  expect((await o.command({ kind: 'rate', roomId, suggestionId, score: 1 })).success).toBe(false)
+  for (const invalid of [0, 6, 2.5, '5']) expect((await g.command({ kind: 'rate', roomId, suggestionId, score: invalid })).success).toBe(false)
+  const parallel = await Promise.all(Array.from({ length: 5 }, (_, i) => g.command({ kind: 'rate', roomId, suggestionId, score: i + 1 })))
+  expect(parallel.every(r => r.success)).toBe(true)
+  let rows = (await h.tool('records_query', { collection: 'ratings', where: { teamId: roomId } })).data.records
+  expect(rows).toHaveLength(2)
+  await expect(host.page.getByText('2 of 2 members rated')).toBeVisible()
+  expect((await o.tool('records_query', { collection: 'ratings', where: { teamId: roomId } })).data.records).toHaveLength(0)
+  expect((await g.tool('records_create', { collection: 'ratings', data: { teamId: roomId, userId: guest.userId, suggestionId, score: '5' } })).success).toBe(false)
+  expect((await h.command({ kind: 'close', roomId })).success).toBe(true)
+  expect((await g.command({ kind: 'rate', roomId, suggestionId, score: 2 })).success).toBe(false)
+  rows = (await h.tool('records_query', { collection: 'ratings', where: { teamId: roomId } })).data.records
+  expect(rows).toHaveLength(2)
+  await expect(host.page.getByRole('button', { name: 'Rate Tea 5 out of 5' })).toBeDisabled()
 })

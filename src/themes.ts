@@ -17,7 +17,7 @@
  */
 
 export const THEMES = [
-  { id: 'decisionroom', label: 'DecisionRoom', description: 'Calm greens and a light, focused workspace.' },
+  { id: 'decisionroom', label: 'CommonGround', description: 'Calm greens and a light, focused workspace.' },
   {
     id: 'slate',
     label: 'Slate',
